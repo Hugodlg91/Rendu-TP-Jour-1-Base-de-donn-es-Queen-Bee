@@ -19,6 +19,8 @@ Pourquoi garder DF3 et pas `telephone` → `site_id`, alors que les deux ne sont
 
 **Dépendance écartée : `telephone` → `site_id`.** Dans `extrait_plat`, `site_id` est le site **de la ruche** (`plat.sql` joint `s.id = r.site_id`), pas `apicultrice.site_id`. Les données ne la contredisent pas (0 ligne dans `contraintes.sql`), mais ce n'est pas une règle métier : pendant une transhumance déclarée (hypothèse du lab 1, UC-CY04), une ruche peut se trouver sur un autre site que celui de son apicultrice, et un même téléphone aurait alors deux `site_id`. Nous ne la retenons donc pas : c'est un nouvel exemple où « 0 ligne » ne prouve pas une DF (Testez-vous 3). Si on la retenait, `ruche_code` → `site_id` deviendrait déductible (`ruche_code` → `telephone` → `site_id`), et le site devrait aller dans `norm.apicultrice` et non dans `norm.ruche`.
 
+**Mise à jour après le retour de la prof (correction 4).** `schema.sql` impose maintenant que la ruche soit sur le site de son apicultrice (clé étrangère composée `ruche_apicultrice_fk`) ; la transhumance deviendra une entité à part (annotations.md, question 4). `telephone` → `site_id` est donc désormais **garantie par la base**. L'analyse ci-dessus est celle du lab 4, faite avec l'hypothèse du jour 1 : avec la nouvelle règle, `ruche_code` → `site_id` se déduit de `ruche_code` → `telephone` → `site_id` (conséquence pour `norm.ruche` : normalisation.md).
+
 **DF fausse :** `apicultrice` → `telephone`. Le nom ne détermine pas la personne : « Aminata Diop » a deux téléphones (`+221 77 100 00 01` à SN-CASA, `+221 77 200 00 03` à SN-KOLD). Résultat dans `contraintes.sql`.
 
 ## Trois fermetures et la clé

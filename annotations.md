@@ -106,8 +106,8 @@ Certaines questions trouvent une réponse dans le CDC : on l'indique.
 
 | Question au client | Notre hypothèse |
 |---|---|
-| Une ruche peut-elle changer de site ? | Oui : le CDC prévoit la **transhumance planifiée** par l'apicultrice (UC-CY04). On ne garde que le site et la position de référence actuels ; un déplacement non déclaré déclenche une alerte de vol |
-| Une ruche peut-elle être sur un autre site que celui de son apicultrice ? | Non, sauf pendant une transhumance déclarée. Le test 7 du lab 2 constate seulement l'écart de site : le modèle ne stocke pas les transhumances, il ne peut donc pas distinguer un cas légitime. Il faudrait une entité TRANSHUMANCE (ruche, site de destination, période) |
+| Une ruche peut-elle changer de site ? | Oui : le CDC prévoit la **transhumance planifiée** par l'apicultrice (UC-CY04). Elle deviendra une entité TRANSHUMANCE (ruche, site de destination, période) : `ruche.site_id` reste le site de rattachement, celui de l'apicultrice. On ne garde que la position de référence actuelle ; un déplacement non déclaré déclenche une alerte de vol |
+| Une ruche peut-elle être sur un autre site que celui de son apicultrice ? | Non. Depuis la correction 4 (retour de la prof), la base l'impose : la clé étrangère composée `ruche_apicultrice_fk (apicultrice_id, site_id)` → `apicultrice (id, site_id)` refuse une ruche hors du site de son apicultrice (test 7 du lab 2). Un séjour sur un autre site pendant une transhumance sera enregistré dans la future entité TRANSHUMANCE, sans changer `ruche.site_id` |
 | Qui peut valider une récolte ? | Le coordinateur **du site de la ruche** uniquement (8 coordinateurs régionaux pour 8 sites, CDC § 1.4 ; le jeu d'essai ne compte que 4 sites et un coordinateur). Il compare la déclaration au poids mesuré par les capteurs, puis valide ou signale un écart (UC-C02). Une apicultrice ne valide jamais sa propre récolte |
 | Une récolte validée peut-elle encore être modifiée ? | Non : une fois validée, elle est figée (seul l'admin peut corriger, et l'action est tracée) |
 | Une ruche est-elle rattachée à une coopérative ? | Le CDC (§ 7.1) le suggère, mais la coopérative n'est **pas déductible de façon unique** : ADHÈRE est 1,n (une apicultrice peut adhérer à plusieurs coopératives) et un site peut avoir plusieurs coopératives. C'est hors périmètre du MCD du jour 1 ; si le client le confirme, il faudrait une association directe RUCHE (1,1) – RELÈVE DE – COOPÉRATIVE (0,n) |
@@ -150,7 +150,7 @@ Légende : **S** usurper une identité · **T** altérer · **R** nier avoir agi
 | SITE | interne | tous les rôles | gestionnaire, admin | **T** : modifier le pays ou le nom d'un site pour fausser les statistiques par pays et les rapports bailleurs |
 | COOPÉRATIVE | interne | coordinateur, gestionnaire, admin | gestionnaire, admin | **T** : ajouter de fausses adhésions pour gonfler l'indicateur « coopératives actives » présenté aux bailleurs |
 | APICULTRICE | confidentielle (téléphone = donnée personnelle de bénéficiaire vulnérable) | l'apicultrice elle-même, coordinateur de son site, gestionnaire, admin | gestionnaire, admin | **I** : récupérer les téléphones pour de l'hameçonnage ou du démarchage |
-| RUCHE | confidentielle (position GPS de référence) | l'apicultrice propriétaire, coordinateur du site, gestionnaire, admin | coordinateur, admin, l'apicultrice (déclaration de transhumance) | **I** : connaître la position GPS pour voler la ruche · **T** : modifier la position de référence pour qu'un vol ne déclenche pas d'alerte |
+| RUCHE | confidentielle (position GPS de référence) | l'apicultrice propriétaire, coordinateur du site, gestionnaire, admin | coordinateur, admin (l'apicultrice déclare ses transhumances dans la future entité TRANSHUMANCE, sans modifier la ruche) | **I** : connaître la position GPS pour voler la ruche · **T** : modifier la position de référence pour qu'un vol ne déclenche pas d'alerte |
 | MESURE | interne (confidentielle pour la position) | l'apicultrice propriétaire, coordinateur du site, gestionnaire | les capteurs uniquement (personne ne modifie à la main) | **T** : **rejouer une ancienne mesure** de poids pour cacher un vol ou une récolte non déclarée (UC-CY02) · **S** : un faux capteur envoie des trames au nom d'une ruche · **D** : saturer la base de fausses mesures |
 | INSPECTION | interne | l'apicultrice, coordinateur du site, gestionnaire | l'apicultrice qui a réalisé l'inspection | **R** : une apicultrice nie avoir constaté l'absence de la reine · **T** : antidater une inspection saisie hors ligne |
 | RÉCOLTE | critique (production, revenus) | l'apicultrice, coordinateur du site, gestionnaire | l'apicultrice déclare ; le coordinateur valide | **R** : **une récolte validée sans qu'on sache par qui** : personne n'est responsable de la validation · **T** : gonfler une quantité déclarée |
@@ -182,8 +182,8 @@ Notation : clé primaire en premier, `#` = clé étrangère.
 |---|---|---|---|
 | site | id (code lisible `SN-CASA`) | nom, pays | — |
 | cooperative | id (UUID) | nom | #site_id → site |
-| apicultrice | id (UUID) | nom, telephone (UNIQUE) | #site_id → site |
-| ruche | id (UUID) | code (UNIQUE), latitude, longitude, date_installation | #site_id → site, #apicultrice_id → apicultrice |
+| apicultrice | id (UUID) | nom, telephone (UNIQUE) ; (id, site_id) UNIQUE | #site_id → site |
+| ruche | id (UUID) | code (UNIQUE), latitude, longitude, date_installation | #site_id → site, #(apicultrice_id, site_id) → apicultrice (id, site_id) (clé composée) |
 | adhesion | (apicultrice_id, cooperative_id) | date_adhesion | #apicultrice_id → apicultrice, #cooperative_id → cooperative |
 | utilisateur | id (UUID) | login, mot_de_passe_hash, role | #site_id → site, #apicultrice_id → apicultrice (UNIQUE) |
 | mesure | id (bigint, jamais exposé) | horodatage, poids_kg, temp_int_c, temp_ext_c, humidite_pct, activite_sonore, batterie_pct, latitude, longitude | #ruche_id → ruche |
@@ -237,3 +237,4 @@ Contraintes de sécurité posées :
 - `recolte_quantite_positive` et `recolte_validation_tracee` : pas de quantité négative, pas de récolte « validée » sans validateur ni date (menace R).
 - `alerte_confiance_bornee CHECK (niveau_confiance BETWEEN 0 AND 1)`.
 - Sur `utilisateur` : un compte « apicultrice » est forcément relié à une apicultrice, et un coordinateur forcément à un site (moindre privilège).
+- Ajoutées après le retour de la prof (RENDU.md, section 7) : `mot_de_passe_hash` obligatoire au format bcrypt (`utilisateur_hache_bcrypt`) ; la ruche sur le site de son apicultrice (clé composée `ruche_apicultrice_fk`) ; pas d'inspection avant 2020 (`inspection_date_plausible`) ni dans le futur (trigger `inspection_pas_dans_le_futur`) ; un index pour chaque clé étrangère qui n'est pas déjà en tête d'une clé primaire ou d'un UNIQUE.

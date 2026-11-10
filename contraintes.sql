@@ -63,6 +63,8 @@ HAVING count(DISTINCT (poids_kg, temp_int_c)) > 1;
 
 -- Dépendance ÉCARTÉE (voir dependances.md) : telephone -> site_id
 -- 0 ligne ici, mais ce n'est pas une règle métier (transhumance, hypothèse du lab 1)
+-- (depuis la correction 4, la clé composée ruche_apicultrice_fk la garantit :
+--  voir dependances.md)
 SELECT telephone, count(DISTINCT site_id) AS nb_sites
 FROM extrait_plat
 GROUP BY telephone

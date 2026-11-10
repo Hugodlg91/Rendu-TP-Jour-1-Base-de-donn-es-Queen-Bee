@@ -3,8 +3,9 @@
 -- Lancement SANS ON_ERROR_STOP (les erreurs sont voulues) :
 --   psql -U postgres -d queenbee -f tests_schema.sql
 --
--- Aucune trace laissée : les tests 1, 2, 3, 6 et 8 sont refusés (rien ne change),
--- les tables des tests 4 et 5 sont supprimées en fin de test.
+-- Aucune trace laissée : les tests 1, 2, 3, 6, 7 (essai), 8 et 9 (deux refus) sont
+-- refusés (rien ne change), les tables des tests 4 et 5 sont supprimées en fin de
+-- test, et l'inspection acceptée du test 9 est annulée par ROLLBACK.
 -- Les UUID affichés dans les messages changent à chaque exécution.
 
 -- Test 1 : une ruche dont l'apicultrice n'existe pas. Attendu : refus
@@ -12,13 +13,14 @@ INSERT INTO ruche (code, latitude, longitude, date_installation, site_id, apicul
 VALUES ('SN-CASA-777', 12.5, -16.2, '2027-03-14', 'SN-CASA', gen_random_uuid());
 -- Obtenu :
 -- ERROR:  insert or update on table "ruche" violates foreign key constraint "ruche_apicultrice_fk"
--- DETAIL:  Key (apicultrice_id)=(16264a23-3c22-4655-8bd9-c7931015fbc7) is not present in table "apicultrice".
--- (l'UUID affiché change à chaque exécution)
+-- DETAIL:  Key (apicultrice_id, site_id)=(d0d03b0a-e2fd-4e8b-a143-a0ddf14dc4e3, SN-CASA) is not present in table "apicultrice".
+-- (l'UUID affiché change à chaque exécution ; la clé est composée depuis la
+--  correction 4 : le message cite le couple apicultrice, site)
 -- Test 2 : supprimer une apicultrice qui a des ruches. Attendu : refus
 DELETE FROM apicultrice WHERE telephone = '+221 77 100 00 01';
 -- Obtenu :
 -- ERROR:  update or delete on table "apicultrice" violates foreign key constraint "ruche_apicultrice_fk" on table "ruche"
--- DETAIL:  Key (id)=(a9823eb7-25df-4188-a430-e3eb107e8681) is still referenced from table "ruche".
+-- DETAIL:  Key (id, site_id)=(4d4cb237-4f5e-48d0-82ba-fece79bf8a6e, SN-CASA) is still referenced from table "ruche".
 -- Test 3 : une ruche sans apicultrice. Attendu : refus
 INSERT INTO ruche (code, latitude, longitude, date_installation, site_id)
 VALUES ('SN-CASA-778', 12.5, -16.2, '2027-03-14', 'SN-CASA');
@@ -60,8 +62,8 @@ SELECT ruche_id, horodatage, 30.0, 50 FROM mesure ORDER BY id LIMIT 1;
 -- DETAIL:  Key (ruche_id, horodatage)=(ae46c5bb-e8da-4a66-a3a3-95396b5ef712, 2027-03-14 00:00:00+00) already exists.
 -- (l'UUID affiché change à chaque exécution)
 -- Test 7 : ruches dont le site diffère de celui de leur apicultrice. Attendu : 0 ligne
--- (hypothèse du lab 1 : une ruche est sur le site de son apicultrice, sauf pendant
---  une transhumance déclarée ; le jeu d'essai n'en contient aucune)
+-- (hypothèse du lab 1 : une ruche est sur le site de son apicultrice ; une
+--  transhumance sera une entité à part, voir annotations.md, question 4)
 SELECT r.code, r.site_id AS site_ruche, a.site_id AS site_apicultrice
 FROM ruche r JOIN apicultrice a ON a.id = r.apicultrice_id
 WHERE r.site_id <> a.site_id;
@@ -69,16 +71,46 @@ WHERE r.site_id <> a.site_id;
 --  code | site_ruche | site_apicultrice
 -- ------+------------+------------------
 -- (0 rows)
--- 0 ligne : l'hypothèse tient avec le jeu d'essai. Mais la base ne l'impose pas
--- (ruche.site_id et apicultrice.site_id sont deux colonnes indépendantes) :
--- une règle à garantir par un trigger qui tolère les transhumances déclarées
--- (entité TRANSHUMANCE, jour 2) ; une clé composite l'imposerait sans exception.
+-- 0 ligne, et c'est désormais IMPOSSIBLE autrement (correction 4) : la clé
+-- étrangère composée ruche_apicultrice_fk (apicultrice_id, site_id) -> apicultrice
+-- (id, site_id) refuse une ruche hors du site de son apicultrice. Essai :
+INSERT INTO ruche (code, latitude, longitude, date_installation, site_id, apicultrice_id)
+VALUES ('SN-KOLD-779', 12.9, -14.9, '2027-03-14', 'SN-KOLD',
+        (SELECT id FROM apicultrice WHERE telephone = '+221 77 100 00 01'));
+-- Obtenu (Aminata Diop de SN-CASA, ruche déclarée à SN-KOLD) :
+-- ERROR:  insert or update on table "ruche" violates foreign key constraint "ruche_apicultrice_fk"
+-- DETAIL:  Key (apicultrice_id, site_id)=(4d4cb237-4f5e-48d0-82ba-fece79bf8a6e, SN-KOLD) is not present in table "apicultrice".
+-- (l'UUID affiché change à chaque exécution)
 -- Test 8 : récolte « declaree » passée à « validee » sans validateur. Attendu : refus
 UPDATE recolte SET statut = 'validee' WHERE statut = 'declaree';
 -- Obtenu :
 -- ERROR:  new row for relation "recolte" violates check constraint "recolte_validation_tracee"
 -- DETAIL:  Failing row contains (88196649-3eb6-4634-b679-60e393890ae5, 7ee148ee-2ddb-4f26-b865-7fddb233cd2d, 2027-03-13, 9.50, validee, null, null).
 -- (les UUID changent à chaque exécution)
+-- Test 9 : une inspection datée de 2099, puis de 2019, puis d'aujourd'hui (correction 5).
+-- Attendu : 2099 refusée (trigger), 2019 refusée (CHECK), aujourd'hui acceptée,
+-- le tout dans des transactions annulées
+BEGIN;
+INSERT INTO inspection (ruche_id, apicultrice_id, date_inspection, etat_colonie)
+SELECT id, apicultrice_id, DATE '2099-03-14', 'bon' FROM ruche WHERE code = 'SN-CASA-021';
+ROLLBACK;
+-- Obtenu :
+-- ERROR:  inspection datée du 2099-03-14 : date dans le futur (aujourd'hui : 2026-11-10)
+-- HINT:  une inspection s'enregistre le jour où elle est faite, ou après
+-- (la date du jour change ; un CHECK avec current_date aurait été faux : voir schema.sql)
+BEGIN;
+INSERT INTO inspection (ruche_id, apicultrice_id, date_inspection, etat_colonie)
+SELECT id, apicultrice_id, DATE '2019-12-31', 'bon' FROM ruche WHERE code = 'SN-CASA-021';
+ROLLBACK;
+-- Obtenu :
+-- ERROR:  new row for relation "inspection" violates check constraint "inspection_date_plausible"
+BEGIN;
+INSERT INTO inspection (ruche_id, apicultrice_id, date_inspection, etat_colonie)
+SELECT id, apicultrice_id, current_date, 'bon' FROM ruche WHERE code = 'SN-CASA-021';
+SELECT count(*) AS inspections FROM inspection;
+ROLLBACK;
+-- Obtenu : INSERT 0 1, puis 7 inspections (les 6 du jeu d'essai + celle du jour),
+-- puis ROLLBACK : il en reste 6.
 
 -- ---------------------------------------------------------------------------
 -- Question du TP : un UUID suffit-il à protéger la ruche d'une autre apicultrice ?
@@ -137,7 +169,8 @@ UPDATE recolte SET statut = 'validee' WHERE statut = 'declaree';
 --     composite avec une colonne NULL n'est pas vérifiée en MATCH SIMPLE, ce qui
 --     est voulu ici)
 --    Effet de bord : tant qu'une ruche a des récoltes, cette FK interdit de
---    changer son site (transhumance). Avec ON UPDATE CASCADE, le site des
+--    changer son site de rattachement (depuis la correction 4, une transhumance
+--    ne le change plus). Avec ON UPDATE CASCADE, le site des
 --    récoltes suivrait la ruche, et les récoltes déjà validées bloqueraient
 --    le déplacement (leur coordinateur est celui de l'ancien site). Si le site
 --    de la récolte doit rester celui du jour de la récolte : pas de FK vers
@@ -145,7 +178,8 @@ UPDATE recolte SET statut = 'validee' WHERE statut = 'declaree';
 -- 2. utilisateur.site_id recopie, pour un compte apicultrice, le site de son
 --    apicultrice, sans que la base impose l'égalité : un compte peut être
 --    rattaché à un autre site et lire ses ruches (I, E). Jour 2 :
---      ALTER TABLE apicultrice ADD CONSTRAINT apicultrice_id_site_uq UNIQUE (id, site_id);
+--      (apicultrice_id_site_uq UNIQUE (id, site_id) existe déjà depuis la
+--       correction 4 : c'est la cible de ruche_apicultrice_fk)
 --      ALTER TABLE utilisateur ADD CONSTRAINT utilisateur_apicultrice_site_fk
 --        FOREIGN KEY (apicultrice_id, site_id) REFERENCES apicultrice (id, site_id);
 --    (15e clé étrangère : non posée aujourd'hui pour garder le modèle du jour 1)
@@ -186,7 +220,8 @@ UPDATE recolte SET statut = 'validee' WHERE statut = 'declaree';
 --    autre site (le lab 1 suppose seulement une apicultrice du site de la ruche) :
 --    contrôle par trigger ou RLS. Les deux CHECK de
 --    utilisateur (cohérence rôle / apicultrice / site) n'ont pas de nom
---    explicite : à nommer au jour 2 (schema.sql est figé au jour 1).
+--    explicite : à nommer au jour 2 (schema.sql est figé au jour 1, hors corrections
+--    demandées par la prof : RENDU.md, section 7).
 -- 7. L'index utilisateur_login_ci ne canonicalise pas le login (espace finale,
 --    lettre cyrillique « а » acceptées). Jour 2 :
 --      CHECK (login ~ '^[a-z0-9._@-]+$')
@@ -194,3 +229,6 @@ UPDATE recolte SET statut = 'validee' WHERE statut = 'declaree';
 --     démonstration imposée « A.Diop accepté »)
 -- 8. Sécurité (RGPD art. 32) : l'algorithme de hachage attendu pour mot_de_passe_hash n'est précisé
 --    nulle part (argon2id ou bcrypt), à fixer côté application.
+--    Corrigé (correction 2) : la colonne est NOT NULL et le CHECK
+--    utilisateur_hache_bcrypt impose le format bcrypt ; par défaut, le haché d'un
+--    secret aléatoire inconnu (compte à activer par réinitialisation).

@@ -72,7 +72,7 @@ for ($i = 0; $i -lt 3; $i++) {
 # --- Lab 2 · schéma relationnel ---------------------------------------------
 Lancer "schema.sql"        "Lab 2 : création des 10 tables" -Stop
 Lancer "donnees.sql"       "Lab 2 : jeu d'essai" -Stop
-Lancer "tests_schema.sql"  "Lab 2 : essayer de casser la base (ERROR attendues : tests 1, 2, 3, 6, 8)"
+Lancer "tests_schema.sql"  "Lab 2 : essayer de casser la base (ERROR attendues : tests 1, 2, 3, 6, 7, 8, 9)"
 # --- Lab 3 · requêtes ---------------------------------------------------------
 Lancer "requetes.sql"      "Lab 3 : les cinq questions" -Stop
 # --- Lab 4 · dépendances fonctionnelles ----------------------------------------

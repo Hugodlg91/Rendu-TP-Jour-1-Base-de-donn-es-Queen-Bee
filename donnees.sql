@@ -90,6 +90,8 @@ JOIN cooperative c ON c.site_id = a.site_id;
 --    Volontairement, la formule fabrique trois fois « a.diop » : le login
 --    unique sera posé au lab 4, après correction des doublons.
 --    Pas de mot de passe dans le jeu d'essai : jamais de mot de passe en clair.
+--    Chaque compte reçoit le haché bcrypt d'un secret aléatoire (DEFAULT de
+--    schema.sql) : il s'active par une réinitialisation.
 -- ---------------------------------------------------------------------------
 INSERT INTO utilisateur (login, role, site_id, apicultrice_id)
 SELECT lower(left(nom, 1)) || '.' || lower(split_part(nom, ' ', 2)),
@@ -124,7 +126,13 @@ CROSS JOIN generate_series(0, 47) AS h;
 -- 8. Inspections : 6, sur 5 ruches seulement
 --    -> 6 ruches jamais inspectées (au moins 2 exigées, utile pour Q3 au lab 3)
 --    L'inspection est réalisée par l'apicultrice propriétaire de la ruche
+--    Le jeu d'essai est daté de mars 2027, comme tout le scénario du TP (mesures
+--    du 14 mars 2027) : ces 6 lignes sont chargées comme une reprise de données,
+--    sans le trigger « pas dans le futur » de schema.sql, remis en service juste
+--    après. Toute nouvelle inspection passe par lui (test 9 de tests_schema.sql).
 -- ---------------------------------------------------------------------------
+ALTER TABLE inspection DISABLE TRIGGER inspection_pas_dans_le_futur;
+
 INSERT INTO inspection (ruche_id, apicultrice_id, date_inspection, etat_colonie,
                         reine_presente, observations)
 SELECT r.id, r.apicultrice_id, v.date_inspection, v.etat, v.reine, v.obs
@@ -137,6 +145,8 @@ FROM (VALUES
   ('CM-BAFO-001', DATE '2027-03-11', 'moyen',  true,  'Traces d''humidité dans la ruche')
 ) AS v(code, date_inspection, etat, reine, obs)
 JOIN ruche r ON r.code = v.code;
+
+ALTER TABLE inspection ENABLE TRIGGER inspection_pas_dans_le_futur;
 
 -- ---------------------------------------------------------------------------
 -- 9. Récoltes : 3, dont une déclarée, une validée (avec validateur et date) et une en écart

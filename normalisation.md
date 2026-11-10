@@ -69,6 +69,8 @@ Pour le vérifier, on projette les DF sur chaque table : pour chaque ensemble X 
 
 La seule DF non triviale est donc `ruche_code → site_id, telephone`, avec la clé à gauche. Même calcul pour les trois autres tables. En termes métier : un site a plusieurs apicultrices, et `telephone → site_id` a été écartée au lab 4 (transhumance). Dans chaque table, la partie gauche de toute dépendance est la clé : **les 4 tables norm sont en BCNF** (donc aussi en 3NF et 2NF).
 
+**Mise à jour après le retour de la prof (correction 4).** Depuis la clé étrangère composée `ruche_apicultrice_fk`, `telephone → site_id` est garantie par la base (dependances.md). Dans `norm.ruche (ruche_code, site_id, telephone)`, elle devient une dépendance transitive (`ruche_code → telephone → site_id`) : avec cette règle, `norm.ruche` est en 2NF mais plus en 3NF, et la version BCNF placerait `site_id` dans `norm.apicultrice`. Nous gardons les tables du lab 5 telles qu'elles ont été construites et vérifiées (contrôles 22 à 27 de `verif_rendu.sql`), avec l'hypothèse de l'époque. Dans `schema.sql`, `ruche.site_id` est de la même façon une redondance **contrôlée** : la clé composée l'empêche de diverger.
+
 La décomposition est **sans perte** : la vue `norm.reconstruit` (jointure des 4 tables, mêmes colonnes dans le même ordre) comparée à `extrait_plat` par `EXCEPT` dans les deux sens donne **0 ligne**. Par le théorème de Heath, en trois étapes binaires (R = extrait_plat) :
 1. DF1 : R = R[site_id, site_nom, pays] ⋈ R1, où R1 = R sans site_nom, pays ;
 2. DF3 : R1 = R1[telephone, apicultrice, cooperative] ⋈ R2, où R2 = R1 sans apicultrice, cooperative ;
