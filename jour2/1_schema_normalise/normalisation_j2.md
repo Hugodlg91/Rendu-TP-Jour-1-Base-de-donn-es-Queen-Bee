@@ -188,3 +188,90 @@ Chaque apicultrice n'a de ruches que sur son site.
 4. **Rester en 3NF plutôt que BCNF.**
    - Avantage : la DF (`telephone`, `theme`) → `formateur` reste portée par la clé primaire, donc vérifiée par un index unique, sans trigger, y compris pour des insertions simultanées.
    - Inconvénient : `formateur` → `theme` est recopiée sur plusieurs lignes, d'où l'anomalie de mise à jour (Moussa Sarr avec deux thèmes, sans aucun message).
+
+---
+
+## Lab 7 · Dénormaliser, en connaissance de cause
+
+### Étape 7.1 · Mesurer avant de copier
+
+`volume.sql` : `INSERT 0 47520` (11 ruches × 90 jours × 48 mesures), puis `ANALYZE`.
+
+Tableau de bord du gestionnaire (UC-G01) pour SN-CASA, sur les 3 derniers jours (requête dans `requetes_j2.sql`, avec les jours découpés en UTC comme dans la synthèse) :
+
+```
+    jour    | nb_mesures | poids_moyen | poids_min | batterie_min
+------------+------------+-------------+-----------+--------------
+ 2027-03-14 |        144 |       37.27 |     30.19 |           73
+ 2027-03-13 |        144 |       32.63 |     30.09 |           90
+ 2027-03-12 |        144 |       32.36 |     30.04 |           90
+```
+
+Notre site SN-CASA a **3 ruches** (et non 4 comme dans l'énoncé), d'où **144 mesures par jour** (3 × 48) au lieu de 192. Les poids sont tirés au hasard : ils changent à chaque reconstruction.
+
+**EXPLAIN ANALYZE sur les mesures brutes : Execution Time 9,785 ms.** La requête parcourt toute la table `mesure` (`Seq Scan`), puis joint, trie et regroupe. La table compte 48 048 lignes sur une base reconstruite (47 520 + 528 du jour 1) ; notre base de travail en comptait 48 049, avec une mesure de test en plus.
+
+### Étape 7.2 · La synthèse, et son prix
+
+`synthese_site_jour`, avec son index unique `synthese_site_jour_pk (site_id, jour)`.
+
+**EXPLAIN ANALYZE sur la synthèse : Execution Time 0,071 ms**, avec les mêmes chiffres (144 | 37.27 | 30.19 | 73…). C'est environ **140 fois plus rapide** : un `Bitmap Index Scan` sur l'index unique (ou un `Index Scan Backward` sur ce même index, une fois les statistiques de la vue calculées), au lieu de relire toutes les mesures (requête dans `requetes_j2.sql`).
+
+**Le prix : le retard.** Le 15 mars à 6 h, SN-CASA-014 (notre équivalent de SN-CASA-011) tombe à **8,40 kg** (vol, UC-CY04 ; scénario dans `requetes_j2.sql`, dans une transaction annulée) :
+- après l'`INSERT`, la synthèse s'arrête au 14 mars : rien d'anormal ;
+- après `REFRESH MATERIALIZED VIEW CONCURRENTLY synthese_site_jour`, la ligne `2027-03-15 | 1 | 8.40` apparaît, avec `poids_min = 8.40`.
+
+**Si la vue n'est rafraîchie que la nuit**, le vol reste invisible jusqu'au rafraîchissement suivant : il n'apparaît que la nuit suivante. Le retard va jusqu'à **24 heures** dans le pire cas (vol juste après le rafraîchissement) ; dans notre scénario (vol à 6 h, rafraîchissement à 2 h), il est d'environ **20 heures**. C'est assez pour que les ruches soient loin. **Un vol se détecte donc sur les mesures brutes, à leur arrivée** (règle ou trigger sur l'insertion : chute de poids, position GPS qui s'écarte de la référence), jamais dans une synthèse. La synthèse sert au pilotage, pas à l'alerte.
+
+**Qui lance le rafraîchissement ?** Personne, si on ne le prévoit pas : PostgreSQL ne rafraîchit jamais une vue matérialisée tout seul. Nous proposons une tâche planifiée chaque nuit à 2 h (extension `pg_cron`, ou un timer système qui lance `psql`). Le détail, et le coût de `CONCURRENTLY` (toute l'agrégation est recalculée sur toute la table `mesure`), sont en commentaire dans `denormalisation.sql`.
+
+**Une autre limite : le site actuel de la ruche.** La synthèse regroupe les mesures par `ruche.site_id`, c'est-à-dire le site de rattachement de la ruche **aujourd'hui** (celui de son apicultrice, depuis la correction 4 du jour 1). Les mesures prises pendant une transhumance sont donc comptées au site de rattachement. Et si la ruche change un jour de site de rattachement (reprise par une apicultrice d'un autre site), après un `REFRESH`, toutes ses anciennes mesures passent au nouveau site : l'historique de l'ancien site change après coup. Pour l'éviter, il faudrait historiser l'affectation de site (l'entité TRANSHUMANCE, avec sa période, vue à l'étape 6.4) et regrouper chaque mesure par le site où était la ruche à son horodatage.
+
+### Étape 7.3 · L'export pour le bailleur
+
+**Casser un haché simple.** On calcule `sha256` du téléphone d'Awa Diop (notre « Fatou Ba »), puis on essaie le million de numéros qui commencent par `+221 77 1` (requêtes dans `requetes_j2.sql`) : **`+221 77 100 00 02` retrouvé en 1 557 ms** (`\timing on`). Un haché sans clé n'est pas un pseudonyme sûr : l'espace des téléphones est trop petit.
+
+**La vue `v_export_bailleur`** : pseudonyme = `HMAC-SHA256(id de l'apicultrice, clé secrète)`, tronqué à 12 caractères. La clé est dans `cle_pseudonymisation`, fermée à PUBLIC.
+
+- Résultat : **8 lignes pour 11 ruches** (deux ruches voisines d'une même apicultrice tombent dans la même case de 0,1 degré), par exemple `829747eb9152 | Sénégal | SN-CASA | 12.6 | -16.3 | 2 | 12.40` (14.00 après les tests du lab 8, qui modifient cette récolte).
+- Vérification de la clé : `SELECT position((SELECT cle FROM cle_pseudonymisation) IN pg_get_viewdef('v_export_bailleur')) > 0;` donne **`f`** (requête dans `requetes_j2.sql`). `position` renvoie un entier (0 si la clé est absente) : c'est le `> 0` qui donne le booléen. La clé n'est pas écrite dans la définition de la vue : elle est lue dans la table à l'exécution.
+
+**Colonnes retirées, et pourquoi chacune**
+
+| Colonne retirée | Pourquoi |
+|---|---|
+| `nom` | identifie directement la personne ; deux « Aminata Diop » montrent en plus qu'un nom n'est même pas une clé |
+| `telephone` | identifiant direct, et donnée exploitable pour l'hameçonnage |
+| `apicultrice.id` en clair | permettrait de recouper avec la base ou un autre export : il est remplacé par son HMAC |
+| `ruche.code` (`SN-CASA-014`) | identifiant stable, recoupable, qui révèle le site et le numéro de la ruche |
+| `latitude`, `longitude` précises | mènent à la ruche, donc au vol : arrondies à 0,1 degré (environ 11 km) |
+| dates et détail des récoltes, mesures, inspections | inutiles au bailleur (minimisation) : seul le total validé est exporté |
+
+**Deux choix gardés, en le sachant** (commentés dans `denormalisation.sql`) :
+- `nb_ruches` reste : le bailleur finance des ruches et suit leur nombre. C'est un agrégat, mais sur un petit site, avec le site et la position approchée, c'est un quasi-identifiant (sur SN-CASA, une seule apicultrice a 2 ruches dans sa case) ;
+- le pseudonyme est stable d'un export à l'autre (la clé ne change pas) : c'est voulu, pour suivre une apicultrice dans le temps. Mais le bailleur peut lui aussi la suivre et recouper ses exports. Pour l'empêcher, il faudrait une clé par export.
+
+### Étape 7.4 · Le journal d'audit
+
+`denormalisation.sql` se relance sans erreur. Deux écarts volontaires avec le modèle de l'énoncé :
+- **le journal n'est jamais supprimé** : `CREATE TABLE IF NOT EXISTS` au lieu de `DROP TABLE` ;
+- **la clé de pseudonymisation n'est créée qu'une fois** : sinon tous les pseudonymes changeraient à chaque relance.
+
+1. **Pourquoi `ligne_id` n'est-il pas une clé étrangère vers la récolte ?** Le journal doit survivre à la ligne qu'il décrit.
+   - Avec une clé étrangère `NO ACTION` ou `RESTRICT`, une récolte journalisée ne pourrait plus jamais être supprimée.
+   - Avec `CASCADE`, supprimer la récolte effacerait sa trace : c'est justement l'action à prouver.
+   - Avec `SET NULL`, on perdrait le lien.
+   - Enfin, le journal couvre plusieurs tables (`recolte`, `utilisateur`) : une seule colonne ne peut pas pointer vers toutes.
+2. **`avant` et `apres` recopient des lignes entières : est-ce acceptable ?** Oui, c'est le rôle d'un journal de preuve : il doit montrer l'état exact avant et après, même si la ligne est modifiée ou supprimée ensuite. C'est une copie voulue, en ajout seul, lisible par l'admin seulement. Avec deux limites, au nom de la minimisation :
+   - **ne pas recopier de secret** : le haché du mot de passe n'est plus recopié dans le journal depuis la correction R1 ; les lignes écrites avant restent, puisque le journal est en ajout seul (constat R1 de `rapport_revue.md`) ;
+   - **fixer une durée de conservation** (RGPD).
+3. **Pourquoi `clock_timestamp()` et pas `now()` ?** `now()` renvoie l'heure du **début** de la transaction. Toutes les lignes d'une même transaction auraient la même heure, et on ne pourrait plus ordonner les actions. `clock_timestamp()` donne l'heure réelle de chaque écriture.
+
+### Testez-vous · Lab 7
+
+1. **Vue ou vue matérialisée ?** Une vue est une requête enregistrée, recalculée à chaque lecture : elle est toujours à jour. Une vue matérialisée stocke son résultat : sa lecture est immédiate, mais elle **est en retard** jusqu'au prochain `REFRESH`.
+2. **Deux raisons de refuser `md5(nom)` comme pseudonyme.**
+   - Sans clé secrète, le haché se casse en essayant une liste de noms (attaque par dictionnaire), comme le téléphone à l'étape 7.3, et MD5 est en plus très rapide à calculer.
+   - Le nom n'est pas un identifiant : les deux « Aminata Diop » auraient le même pseudonyme et seraient fusionnées dans l'export. Un nom peut aussi changer.
+3. **Les données de `v_export_bailleur` sont-elles soumises au RGPD ?** Oui. Ce sont des données **pseudonymisées**, pas anonymes : BeeAfrica, qui détient la clé, peut retrouver la personne. Un recoupement reste aussi possible : site, position approchée et nombre de ruches, sur des cases où vit parfois une seule apicultrice.
+4. **Pourquoi le journal n'a-t-il pas de clé étrangère vers la table surveillée ?** Pour la même raison que la question 1 de l'étape 7.4 : il doit survivre aux suppressions, couvrir plusieurs tables, et ne jamais empêcher ni effacer quoi que ce soit.
